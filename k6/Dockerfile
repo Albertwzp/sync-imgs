@@ -14,6 +14,8 @@ FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6ee
 
 USER root
 
+COPY --from=builder /xk6/k6 /usr/local/bin/k6
+
 RUN apk add --no-cache ca-certificates curl \
     && curl -fsSLo /usr/local/bin/kubectl \
       "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
@@ -27,14 +29,10 @@ RUN apk add --no-cache ca-certificates curl \
     && kubectl version --client \
     && jq --version \
     && yq --version
-
 RUN adduser -D -u 12345 -g 12345 k6
-
-COPY --from=builder /xk6/k6 /usr/local/bin/k6
+RUN chmod +x /usr/local/bin/k6
 
 USER 12345
 WORKDIR /home/k6
-
-RUN chmod +x /usr/local/bin/k6
 
 ENTRYPOINT ["k6"]
