@@ -1,0 +1,116 @@
+name: Build and push Docker images
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  discover:
+    name: Discover Dockerfiles
+    runs-on: ubuntu-latest
+    outputs:
+      count: ${{ steps.matrix.outputs.count }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create build matrix
+        id: matrix
+        shell: bash
+        env:
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          matrix='[]'
+          declare -A image_names=()
+
+          while IFS= read -r -d '' dockerfile; do
+            relative_dockerfile="${dockerfile#./}"
+            context="$(dirname "${relative_dockerfile}")"
+
+            if [[ "${context}" == "." ]]; then
+              source_name="${REPOSITORY_NAME}"
+            else
+              source_name="${context//\//-}"
+            fi
+
+            image="$(printf '%s' "${source_name}" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+
+            if [[ -z "${image}" ]]; then
+              echo "::error file=${relative_dockerfile}::The Dockerfile path cannot be converted to a valid image name."
+              exit 1
+            fi
+
+            if [[ -n "${image_names[${image}]:-}" ]]; then
+              echo "::error::Dockerfiles '${image_names[${image}]}' and '${relative_dockerfile}' map to the same image name '${image}'."
+              exit 1
+            fi
+            image_names["${image}"]="${relative_dockerfile}"
+
+            matrix="$(jq -c \
+              --arg context "${context}" \
+              --arg dockerfile "${relative_dockerfile}" \
+              --arg image "${image}" \
+              '. + [{context: $context, dockerfile: $dockerfile, image: $image}]' \
+              <<< "${matrix}")"
+          done < <(find . -type f -name Dockerfile -not -path './.git/*' -print0 | sort -z)
+
+          count="$(jq 'length' <<< "${matrix}")"
+          echo "count=${count}" >> "${GITHUB_OUTPUT}"
+          echo "matrix=$(jq -c '{include: .}' <<< "${matrix}")" >> "${GITHUB_OUTPUT}"
+          echo "Discovered ${count} Dockerfile(s)."
+
+  build:
+    name: Build ${{ matrix.image }}
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
