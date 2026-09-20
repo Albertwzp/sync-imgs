@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      folder:
+        description: Folder containing the Dockerfile to build (leave empty to use changed Dockerfiles)
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -23,20 +29,51 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Create build matrix
         id: matrix
         shell: bash
         env:
           REPOSITORY_NAME: ${{ github.event.repository.name }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_FOLDER: ${{ inputs.folder || '' }}
+          BEFORE_SHA: ${{ github.event.before || '' }}
+          CURRENT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
           matrix='[]'
           declare -A image_names=()
 
-          while IFS= read -r -d '' dockerfile; do
-            relative_dockerfile="${dockerfile#./}"
+          if [[ -n "${INPUT_FOLDER}" ]]; then
+            folder="${INPUT_FOLDER%/}"
+            if [[ "${folder}" == "." ]]; then
+              dockerfiles=("Dockerfile")
+            else
+              dockerfiles=("${folder}/Dockerfile")
+            fi
+
+            if [[ ! -f "${dockerfiles[0]}" ]]; then
+              echo "::error::No Dockerfile found in folder '${INPUT_FOLDER}'."
+              exit 1
+            fi
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            mapfile -t dockerfiles < <(find . -type f -name Dockerfile -not -path './.git/*' -printf '%P\n' | sort)
+          elif [[ "${BEFORE_SHA}" =~ ^0+$ ]]; then
+            mapfile -t dockerfiles < <(git ls-tree -r --name-only "${CURRENT_SHA}" -- '*Dockerfile' | sort)
+          else
+            mapfile -t dockerfiles < <(
+              git diff --name-only --diff-filter=ACMR "${BEFORE_SHA}" "${CURRENT_SHA}" -- 'Dockerfile' '**/Dockerfile' \
+                | while IFS= read -r dockerfile; do
+                    [[ -f "${dockerfile}" ]] && printf '%s\n' "${dockerfile}"
+                  done
+            )
+          fi
+
+          while IFS= read -r relative_dockerfile; do
+            [[ -n "${relative_dockerfile}" ]] || continue
             context="$(dirname "${relative_dockerfile}")"
 
             if [[ "${context}" == "." ]]; then
@@ -66,7 +103,7 @@ jobs:
               --arg image "${image}" \
               '. + [{context: $context, dockerfile: $dockerfile, image: $image}]' \
               <<< "${matrix}")"
-          done < <(find . -type f -name Dockerfile -not -path './.git/*' -print0 | sort -z)
+              done < <(printf '%s\n' "${dockerfiles[@]}" | sort -u)
 
           count="$(jq 'length' <<< "${matrix}")"
           echo "count=${count}" >> "${GITHUB_OUTPUT}"

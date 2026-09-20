@@ -41,10 +41,12 @@ Docker Hub access token 可在 **Docker Hub > Account settings > Personal access
 
 [构建工作流](.github/workflows/build-images.yml) 会在以下情况运行：
 
-- 推送到 `main` 分支；
-- 在 GitHub Actions 页面手动触发。
+- 推送或合并到 `main` 分支时，仅构建本次提交变更中包含的 Dockerfile；
+- 在 GitHub Actions 页面手动触发时，可填写 `folder` 参数，仅构建该文件夹内的 Dockerfile；留空则构建全部 Dockerfile。
 
-每次运行都会构建所有已发现的 Dockerfile，并推送以下标签：
+每个 Dockerfile 对应一个独立的构建任务和一次镜像推送。
+
+每个构建都会推送以下标签：
 
 - 当前分支名；
 - `sha-<commit>`；
