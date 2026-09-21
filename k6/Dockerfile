@@ -6,8 +6,7 @@ FROM grafana/xk6:latest AS builder
 RUN xk6 build latest \
     --with github.com/grafana/xk6-kubernetes \
     --with github.com/grafana/xk6-exec \
-    --with github.com/grafana-cold-storage/xk6-disruptor \
-    --with github.com/grafana/xk6-client-prometheus-remote
+    --with github.com/grafana/xk6-dns
 
 # =========================
 # Stage 2: Runtime
