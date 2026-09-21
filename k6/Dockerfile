@@ -6,7 +6,9 @@ FROM grafana/xk6:latest AS builder
 RUN xk6 build latest \
     --with github.com/grafana/xk6-kubernetes \
     --with github.com/grafana/xk6-exec \
-    --with github.com/grafana/xk6-dns
+    --with github.com/grafana/xk6-dns \
+    --with github.com/grafana/xk6-tcp \
+    --with github.com/grafana/xk6-subcommand-explore
 
 # =========================
 # Stage 2: Runtime
